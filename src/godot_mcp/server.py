@@ -1034,6 +1034,136 @@ class GodotMcpServer:
                 ),
             ),
             ToolDefinition(
+                name="godot_run_with_profiler",
+                description=(
+                    "Run a Godot project or a specific scene with profiler to report performance such as fps, frame_time_ms, process_time_ms, physics_time_ms, physics_frame_time_ms, navigation_process_ms, memory_static_bytes, object_count, resource_count, node_count, orphan_node_count, physics_2d_active_objects, physics_2d_collision_pairs, physics_2d_island_count, physics_3d_active_objects, physics_3d_collision_pairs, physics_3d_island_count, audio_output_latency_ms."
+                    
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "project_path": {
+                            "type": "string",
+                            "description": "Path to the Godot project directory or its project.godot file.",
+                        },
+                        "scene_path": {
+                            "type": "string",
+                            "description": (
+                                "Scene to profile (res:// path or absolute path). "
+                                "If omitted, the project's configured main scene is used."
+                            ),
+                        },
+                        "duration": {
+                            "type": "number",
+                            "description": "How many seconds to run the profiler before stopping and collecting results.",
+                            "default": 5.0,
+                            "minimum": 0.5,
+                        },
+                        "sample_interval": {
+                            "type": "number",
+                            "description": (
+                                "Minimum interval in seconds between samples. "
+                                "0 (default) means sample every frame."
+                            ),
+                            "default": 0.0,
+                            "minimum": 0.0,
+                        },
+                        "headless": {
+                            "type": "boolean",
+                            "description": "Whether to run in headless mode. Note: rendering metrics will be zero in headless mode.",
+                            "default": False,
+                        },
+                        "include_samples": {
+                            "type": "boolean",
+                            "description": "If true, include the raw per-frame sample array in the response (can be large).",
+                            "default": False,
+                        },
+                        "godot_executable": {
+                            "type": "string",
+                            "description": "Optional explicit path to the Godot executable or .app bundle.",
+                        },
+                    },
+                    "required": ["project_path"],
+                    "additionalProperties": False,
+                },
+                handler=lambda args: self.controller.run_profiler(
+                    project_path=args["project_path"],
+                    scene_path=args.get("scene_path"),
+                    duration=float(args.get("duration", 5.0)),
+                    sample_interval=float(args.get("sample_interval", 0.0)),
+                    headless=bool(args.get("headless", False)),
+                    include_samples=bool(args.get("include_samples", False)),
+                    godot_executable=args.get("godot_executable"),
+                ),
+            ),
+            ToolDefinition(
+                name="godot_run_with_visual_profiler",
+                description=(
+                    "Profile a Godot project's rendering/visual performance. "
+                    "such as fps, frame_time_ms, render_objects_in_frame, render_primitives_in_frame, render_draw_calls_in_frame, render_video_mem_bytes, navigation_process_ms, object_count, node_count"
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "project_path": {
+                            "type": "string",
+                            "description": "Path to the Godot project directory or its project.godot file.",
+                        },
+                        "scene_path": {
+                            "type": "string",
+                            "description": (
+                                "Scene to profile (res:// path or absolute path). "
+                                "If omitted, the project's configured main scene is used."
+                            ),
+                        },
+                        "duration": {
+                            "type": "number",
+                            "description": "How many seconds to run the visual profiler before stopping and collecting results.",
+                            "default": 5.0,
+                            "minimum": 0.5,
+                        },
+                        "sample_interval": {
+                            "type": "number",
+                            "description": (
+                                "Minimum interval in seconds between samples. "
+                                "0 (default) means sample every frame."
+                            ),
+                            "default": 0.0,
+                            "minimum": 0.0,
+                        },
+                        "headless": {
+                            "type": "boolean",
+                            "description": (
+                                "Whether to run in headless mode. "
+                                "WARNING: rendering metrics will be zero in headless mode — "
+                                "only use headless if you want non-rendering stats."
+                            ),
+                            "default": False,
+                        },
+                        "include_samples": {
+                            "type": "boolean",
+                            "description": "If true, include the raw per-frame sample array in the response (can be large).",
+                            "default": False,
+                        },
+                        "godot_executable": {
+                            "type": "string",
+                            "description": "Optional explicit path to the Godot executable or .app bundle.",
+                        },
+                    },
+                    "required": ["project_path"],
+                    "additionalProperties": False,
+                },
+                handler=lambda args: self.controller.run_visual_profiler(
+                    project_path=args["project_path"],
+                    scene_path=args.get("scene_path"),
+                    duration=float(args.get("duration", 5.0)),
+                    sample_interval=float(args.get("sample_interval", 0.0)),
+                    headless=bool(args.get("headless", False)),
+                    include_samples=bool(args.get("include_samples", False)),
+                    godot_executable=args.get("godot_executable"),
+                ),
+            ),
+            ToolDefinition(
                 name="godot_screenshot",
                 description="Run a Godot project or specific scene for a short duration, keep the last rendered frame, and return the screenshot path.",
                 input_schema={
@@ -1142,6 +1272,7 @@ class GodotMcpServer:
                 "3. Create a scene and add nodes or primitive meshes.",
                 "4. Inspect properties and scene trees while iterating.",
                 "5. Validate the scene before running or capturing output.",
+                "6. Use `godot_profile` or `godot_visual_profile` to measure performance — do NOT manually write profiler scripts.",
                 "",
                 "Available tools:",
                 tool_lines,

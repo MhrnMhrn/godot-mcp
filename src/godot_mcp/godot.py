@@ -774,6 +774,103 @@ def _scan_project_resources(project_dir: Path, root_dir: Path) -> dict[str, list
     return categorized
 
 
+_PROFILER_AUTOLOAD_KEY = "_GodotMcpProfiler"
+_PROFILER_SCRIPT_NAME = "profiler.gd"
+
+
+def _inject_profiler_autoload(project_dir: Path) -> tuple[Path, str]:
+    src = Path(__file__).resolve().parent / "templates" / _PROFILER_SCRIPT_NAME
+    if not src.exists():
+        raise GodotError(f"Missing profiler helper script: {src}")
+
+    dest_dir = project_dir / ".godot-mcp"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / _PROFILER_SCRIPT_NAME
+    shutil.copy2(src, dest)
+
+    project_file = project_dir / "project.godot"
+    original_content = project_file.read_text(encoding="utf-8")
+
+    autoload_line = f'{_PROFILER_AUTOLOAD_KEY}="*res://.godot-mcp/{_PROFILER_SCRIPT_NAME}"'
+
+    if "[autoload]" in original_content:
+        modified = original_content.replace(
+            "[autoload]", f"[autoload]\n\n{autoload_line}", 1
+        )
+    else:
+        modified = original_content.rstrip() + f"\n\n[autoload]\n\n{autoload_line}\n"
+
+    project_file.write_text(modified, encoding="utf-8")
+    return dest, original_content
+
+
+def _remove_profiler_autoload(
+    project_dir: Path, original_content: str, script_dest: Path
+) -> None:
+    project_file = project_dir / "project.godot"
+    project_file.write_text(original_content, encoding="utf-8")
+    script_dest.unlink(missing_ok=True)
+
+
+def _compute_aggregate_stats(
+    samples: list[dict[str, Any]], keys: list[str]
+) -> dict[str, dict[str, float]]:
+    import math
+
+    stats: dict[str, dict[str, float]] = {}
+    for key in keys:
+        values = [s[key] for s in samples if key in s and isinstance(s[key], (int, float))]
+        if not values:
+            continue
+        values_sorted = sorted(values)
+        n = len(values_sorted)
+        avg = sum(values_sorted) / n
+        stats[key] = {
+            "min": values_sorted[0],
+            "max": values_sorted[-1],
+            "avg": round(avg, 4),
+            "median": values_sorted[n // 2],
+            "p95": values_sorted[min(math.ceil(n * 0.95) - 1, n - 1)],
+            "p99": values_sorted[min(math.ceil(n * 0.99) - 1, n - 1)],
+            "sample_count": n,
+        }
+    return stats
+
+
+_PERFORMANCE_STAT_KEYS = [
+    "fps",
+    "frame_time_ms",
+    "process_time_ms",
+    "physics_time_ms",
+    "physics_frame_time_ms",
+    "navigation_process_ms",
+    "memory_static_bytes",
+    "object_count",
+    "resource_count",
+    "node_count",
+    "orphan_node_count",
+    "physics_2d_active_objects",
+    "physics_2d_collision_pairs",
+    "physics_2d_island_count",
+    "physics_3d_active_objects",
+    "physics_3d_collision_pairs",
+    "physics_3d_island_count",
+    "audio_output_latency_ms",
+]
+
+_VISUAL_STAT_KEYS = [
+    "fps",
+    "frame_time_ms",
+    "render_objects_in_frame",
+    "render_primitives_in_frame",
+    "render_draw_calls_in_frame",
+    "render_video_mem_bytes",
+    "navigation_process_ms",
+    "object_count",
+    "node_count",
+]
+
+
 class GodotController:
     def __init__(self) -> None:
         self._docs_cache: dict[str, dict[str, Any]] = {}
@@ -2380,6 +2477,191 @@ class GodotController:
             "godot_executable": str(executable),
             "godot_version": version,
         }
+
+    def _run_profiler(
+        self,
+        project_path: str,
+        scene_path: str | None,
+        duration: float,
+        sample_interval: float,
+        headless: bool,
+        godot_executable: str | None,
+        stat_keys: list[str],
+        include_samples: bool,
+    ) -> dict[str, Any]:
+        project_dir = ensure_project_path(project_path)
+        executable, version = resolve_godot_executable(godot_executable)
+        if duration <= 0:
+            raise GodotError("`duration` must be greater than 0.")
+
+        mcp_dir = project_dir / ".godot-mcp"
+        mcp_dir.mkdir(parents=True, exist_ok=True)
+        results_path = mcp_dir / "profiler_results.json"
+        results_path.unlink(missing_ok=True)
+
+        script_dest, original_project_content = _inject_profiler_autoload(project_dir)
+
+        try:
+            log_path = _create_log_path(project_dir, "profiler")
+            command: list[str] = [
+                str(executable),
+                "--log-file",
+                str(log_path),
+                "--path",
+                str(project_dir),
+            ]
+            if headless:
+                command.append("--headless")
+
+            absolute_scene_path: Path | None = None
+            resource_scene_path: str | None = None
+            run_target = "project"
+            if scene_path:
+                absolute_scene_path, resource_scene_path = resolve_scene_path(
+                    project_dir, scene_path
+                )
+                if not absolute_scene_path.exists():
+                    raise GodotError(f"Scene not found: {absolute_scene_path}")
+                command.append(str(absolute_scene_path))
+                run_target = "scene"
+
+            command.extend([
+                "--",
+                "--duration",
+                str(duration),
+                "--output-path",
+                str(results_path),
+                "--sample-interval",
+                str(sample_interval),
+            ])
+
+            timeout_seconds = max(60, int(duration * 3) + 30)
+            process = subprocess.Popen(
+                command,
+                cwd=project_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            terminated_after_timeout = False
+            force_killed = False
+            try:
+                stdout_text, stderr_text = process.communicate(
+                    timeout=timeout_seconds
+                )
+            except subprocess.TimeoutExpired:
+                terminated_after_timeout = True
+                process.terminate()
+                try:
+                    stdout_text, stderr_text = process.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    force_killed = True
+                    process.kill()
+                    stdout_text, stderr_text = process.communicate(timeout=10)
+
+        finally:
+            _remove_profiler_autoload(project_dir, original_project_content, script_dest)
+
+        if not results_path.exists():
+            log_text = (
+                log_path.read_text(encoding="utf-8", errors="replace")
+                if log_path.exists()
+                else ""
+            )
+            debug = _classify_debug_lines(stdout_text, stderr_text, log_text)
+            raise GodotError(
+                "Profiler did not produce results. The project may have crashed or "
+                "failed to start.\n"
+                f"Log file: {log_path}\n"
+                f"Exit code: {process.returncode}\n"
+                + (
+                    f"Errors:\n" + "\n".join(debug["errors"][:10])
+                    if debug["errors"]
+                    else f"stderr: {stderr_text[:2000]}" if stderr_text.strip() else "No error output."
+                )
+            )
+
+        raw_results = json.loads(
+            results_path.read_text(encoding="utf-8", errors="replace")
+        )
+        results_path.unlink(missing_ok=True)
+
+        samples: list[dict[str, Any]] = raw_results.get("samples", [])
+        aggregate = _compute_aggregate_stats(samples, stat_keys)
+
+        result: dict[str, Any] = {
+            "project_path": str(project_dir),
+            "scene_path": str(absolute_scene_path) if absolute_scene_path else None,
+            "scene_resource_path": resource_scene_path,
+            "run_target": run_target,
+            "duration_seconds": raw_results.get("duration_seconds", duration),
+            "sample_count": len(samples),
+            "headless": headless,
+            "aggregate_stats": aggregate,
+            "command": command,
+            "log_path": str(log_path),
+            "exit_code": process.returncode,
+            "terminated_after_timeout": terminated_after_timeout,
+            "force_killed": force_killed,
+            "godot_version": version,
+        }
+        if include_samples:
+            result["samples"] = samples
+
+        return result
+
+    def run_profiler(
+        self,
+        project_path: str,
+        scene_path: str | None = None,
+        duration: float = 5.0,
+        sample_interval: float = 0.0,
+        headless: bool = False,
+        include_samples: bool = False,
+        godot_executable: str | None = None,
+    ) -> dict[str, Any]:
+        """Run a project/scene with the performance profiler and return aggregate stats.
+
+        Collects FPS, frame times, memory, object counts, and physics metrics
+        from Godot's ``Performance`` singleton.
+        """
+        return self._run_profiler(
+            project_path=project_path,
+            scene_path=scene_path,
+            duration=duration,
+            sample_interval=sample_interval,
+            headless=headless,
+            godot_executable=godot_executable,
+            stat_keys=_PERFORMANCE_STAT_KEYS,
+            include_samples=include_samples,
+        )
+
+    def run_visual_profiler(
+        self,
+        project_path: str,
+        scene_path: str | None = None,
+        duration: float = 5.0,
+        sample_interval: float = 0.0,
+        headless: bool = False,
+        include_samples: bool = False,
+        godot_executable: str | None = None,
+    ) -> dict[str, Any]:
+        """Run a project/scene with the visual profiler and return rendering stats.
+
+        Focuses on draw calls, primitives, objects in frame, and video memory
+        from Godot's ``Performance`` singleton.
+        """
+        return self._run_profiler(
+            project_path=project_path,
+            scene_path=scene_path,
+            duration=duration,
+            sample_interval=sample_interval,
+            headless=headless,
+            godot_executable=godot_executable,
+            stat_keys=_VISUAL_STAT_KEYS,
+            include_samples=include_samples,
+        )
 
     def run_with_capture(
         self,
