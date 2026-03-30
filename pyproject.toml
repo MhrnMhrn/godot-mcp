@@ -9,7 +9,8 @@ description = "A dependency-free MCP server for driving Godot 4.5+ projects."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-  { name = "Mehran Goudarzi" }
+  { name = "Mehran Goudarzi", email = "skullboxmhrn@gmail.com" },
+  { name = "Mehrzad Sepahi", email = "mehrzadsepahi@icloud.com" }
 ]
 license = { text = "MIT" }
 
