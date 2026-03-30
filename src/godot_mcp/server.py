@@ -998,7 +998,7 @@ class GodotMcpServer:
                 ),
             ),
             ToolDefinition(
-                name="godot_run_with_visual_profile",
+                name="godot_run_with_visual_profiler",
                 description=(
                     "Profile a Godot project's rendering/visual performance. "
                     "such as fps, frame_time_ms, render_objects_in_frame, render_primitives_in_frame, render_draw_calls_in_frame, render_video_mem_bytes, navigation_process_ms, object_count, node_count"

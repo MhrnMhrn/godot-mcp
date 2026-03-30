@@ -60,6 +60,11 @@ Tested with **Codex** and **Claude**. Should also work with **LMStudio**, **Open
 
 - **Search Docs** (`godot_search_docs`) : Searches a cached API dump generated from the selected Godot executable, so results stay aligned with the installed engine version.
 
+- **Run with Visual Profile** (`godot_run_with_visual_profiler`): Profiles a Godot project’s rendering and visual performance, reporting metrics such as fps, frame_time_ms, render_objects_in_frame, render_primitives_in_frame, render_draw_calls_in_frame, render_video_mem_bytes, navigation_process_ms, object_count, and node_count.
+
+- **Run with Profiler** (`godot_run_with_profiler`): Runs a Godot project or a specific scene with the built-in profiler to capture detailed performance data, including fps, frame_time_ms, process_time_ms, physics_time_ms, physics_frame_time_ms, navigation_process_ms, memory_static_bytes, object_count, resource_count, node_count, orphan_node_count, physics_2d_active_objects, physics_2d_collision_pairs, physics_2d_island_count, physics_3d_active_objects, physics_3d_collision_pairs, physics_3d_island_count, and audio_output_latency_ms.
+
+
 The server also exposes MCP resource discovery over stdio, so clients can inspect a static tool catalog resource and a per-tool detail template without needing to call the tools first.
 
 ## Requirements
