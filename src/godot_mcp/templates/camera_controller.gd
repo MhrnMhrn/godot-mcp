@@ -83,48 +83,87 @@ func _apply_waypoint_at_time(t: float) -> void:
 	if _waypoints.size() == 0 or _camera == null:
 		return
 
-	# Clamp to waypoint time range.
-	var clamped_t: float = clampf(t, 0.0, _total_waypoint_time)
+	# With a single waypoint just hold it.
+	if _waypoints.size() == 1:
+		var wp: Dictionary = _waypoints[0]
+		_camera.position = _dict_to_vector3(wp.get("position", {}))
+		_camera.rotation_degrees = _dict_to_vector3(wp.get("rotation_degrees", {}))
+		if wp.has("fov"):
+			_camera.fov = float(wp["fov"])
+		return
 
-	# Find the two surrounding waypoints.
-	var prev_wp: Dictionary = _waypoints[0]
-	var next_wp: Dictionary = _waypoints[0]
+	# Remap global time with a single ease-in/out curve so the camera accelerates
+	# from rest and decelerates to a stop at the end — applied once globally so
+	# there are no velocity discontinuities at intermediate waypoints.
+	var global_progress: float = clampf(t / _total_waypoint_time, 0.0, 1.0)
+	var clamped_t: float = _smoothstep(global_progress) * _total_waypoint_time
 
-	for i in range(_waypoints.size()):
-		var wp: Dictionary = _waypoints[i]
-		var wp_time: float = float(wp.get("time", 0.0))
-		if wp_time <= clamped_t:
-			prev_wp = wp
-			if i + 1 < _waypoints.size():
-				next_wp = _waypoints[i + 1]
-			else:
-				next_wp = wp
+	# Find segment index i such that waypoints[i].time <= clamped_t < waypoints[i+1].time.
+	var seg: int = 0
+	for i in range(_waypoints.size() - 1):
+		if float(_waypoints[i].get("time", 0.0)) <= clamped_t:
+			seg = i
 		else:
-			next_wp = wp
 			break
 
-	var prev_time: float = float(prev_wp.get("time", 0.0))
-	var next_time: float = float(next_wp.get("time", 0.0))
+	var t0: float = float(_waypoints[seg].get("time", 0.0))
+	var t1: float = float(_waypoints[seg + 1].get("time", 0.0))
+	var local_t: float = 0.0
+	if t1 > t0:
+		local_t = clampf((clamped_t - t0) / (t1 - t0), 0.0, 1.0)
 
-	var weight: float = 0.0
-	if next_time > prev_time:
-		weight = clampf((clamped_t - prev_time) / (next_time - prev_time), 0.0, 1.0)
-		# Apply easing for smooth motion.
-		weight = _smoothstep(weight)
+	# Catmull-Rom control point indices (clamped at boundaries).
+	var i0: int = max(seg - 1, 0)
+	var i1: int = seg
+	var i2: int = seg + 1
+	var i3: int = min(seg + 2, _waypoints.size() - 1)
 
-	var prev_pos := _dict_to_vector3(prev_wp.get("position", {}))
-	var next_pos := _dict_to_vector3(next_wp.get("position", {}))
-	_camera.position = prev_pos.lerp(next_pos, weight)
+	var p0 := _dict_to_vector3(_waypoints[i0].get("position", {}))
+	var p1 := _dict_to_vector3(_waypoints[i1].get("position", {}))
+	var p2 := _dict_to_vector3(_waypoints[i2].get("position", {}))
+	var p3 := _dict_to_vector3(_waypoints[i3].get("position", {}))
+	_camera.position = _catmull_rom_v3(p0, p1, p2, p3, local_t)
 
-	var prev_rot := _dict_to_vector3(prev_wp.get("rotation_degrees", {}))
-	var next_rot := _dict_to_vector3(next_wp.get("rotation_degrees", {}))
-	_camera.rotation_degrees = prev_rot.lerp(next_rot, weight)
+	var r0 := _dict_to_vector3(_waypoints[i0].get("rotation_degrees", {}))
+	var r1 := _dict_to_vector3(_waypoints[i1].get("rotation_degrees", {}))
+	var r2 := _dict_to_vector3(_waypoints[i2].get("rotation_degrees", {}))
+	var r3 := _dict_to_vector3(_waypoints[i3].get("rotation_degrees", {}))
+	_camera.rotation_degrees = _catmull_rom_v3(r0, r1, r2, r3, local_t)
 
-	# Interpolate FOV if provided.
-	if prev_wp.has("fov") or next_wp.has("fov"):
-		var prev_fov: float = float(prev_wp.get("fov", _camera.fov))
-		var next_fov: float = float(next_wp.get("fov", _camera.fov))
-		_camera.fov = lerpf(prev_fov, next_fov, weight)
+	# Interpolate FOV if provided on either end of the segment.
+	var wp1: Dictionary = _waypoints[i1]
+	var wp2: Dictionary = _waypoints[i2]
+	if wp1.has("fov") or wp2.has("fov"):
+		var f0: float = float(_waypoints[i0].get("fov", _camera.fov))
+		var f1: float = float(wp1.get("fov", _camera.fov))
+		var f2: float = float(wp2.get("fov", _camera.fov))
+		var f3: float = float(_waypoints[i3].get("fov", _camera.fov))
+		_camera.fov = _catmull_rom_f(f0, f1, f2, f3, local_t)
+
+
+## Catmull-Rom spline for Vector3 — produces a smooth curve through p1→p2
+## with continuous velocity at each interior waypoint.
+func _catmull_rom_v3(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, t: float) -> Vector3:
+	var t2 := t * t
+	var t3 := t2 * t
+	return 0.5 * (
+		2.0 * p1
+		+ (-p0 + p2) * t
+		+ (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+		+ (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+	)
+
+
+## Catmull-Rom spline for a scalar (used for FOV).
+func _catmull_rom_f(p0: float, p1: float, p2: float, p3: float, t: float) -> float:
+	var t2 := t * t
+	var t3 := t2 * t
+	return 0.5 * (
+		2.0 * p1
+		+ (-p0 + p2) * t
+		+ (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+		+ (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+	)
 
 
 func _smoothstep(t: float) -> float:
