@@ -2788,6 +2788,7 @@ class GodotController:
         camera_waypoints: list[dict[str, Any]] | None = None,
         camera_node_path: str | None = None,
         godot_executable: str | None = None,
+        output_format: str = "avi",
     ) -> dict[str, Any]:
         project_dir = ensure_project_path(project_path)
         executable, version = resolve_godot_executable(godot_executable)
@@ -2797,7 +2798,11 @@ class GodotController:
         if fps < 1:
             raise GodotError("`fps` must be at least 1.")
 
-        ffmpeg_path = shutil.which("ffmpeg")
+        output_format = output_format.lower()
+        if output_format not in ("avi", "mp4"):
+            raise GodotError("`output_format` must be 'avi' or 'mp4'.")
+
+        ffmpeg_path = shutil.which("ffmpeg") if output_format == "mp4" else None
 
         absolute_scene_path: Path | None = None
         resource_scene_path: str | None = None
@@ -2838,8 +2843,11 @@ class GodotController:
         recordings_dir.mkdir(parents=True, exist_ok=True)
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         stem = f"{timestamp}-{run_target}-{snake_case_name(scene_label, default=run_target)}"
-        movie_output_path = recordings_dir / f"{stem}.png"
-        final_video_path = recordings_dir / f"{stem}.mp4"
+        if output_format == "avi":
+            movie_output_path = recordings_dir / f"{stem}.avi"
+        else:
+            movie_output_path = recordings_dir / f"{stem}.png"
+        final_video_path = recordings_dir / f"{stem}.{output_format}"
         log_path = _create_log_path(project_dir, "record-video")
 
         injected_autoload = False
@@ -2902,11 +2910,47 @@ class GodotController:
             if waypoints_file_path:
                 Path(waypoints_file_path).unlink(missing_ok=True)
 
+        wav_path = recordings_dir / f"{stem}.wav"
+        warnings: list[str] = []
+
+        if output_format == "avi":
+            if result.returncode != 0 or not movie_output_path.exists():
+                details = "\n".join(
+                    part for part in [result.stdout.strip(), result.stderr.strip()] if part
+                ).strip()
+                raise GodotError(
+                    "Failed to record AVI video from Godot.\n"
+                    f"Log file: {log_path}\n"
+                    f"{details or 'No output was returned.'}"
+                )
+
+            has_audio = wav_path.exists() and wav_path.stat().st_size > 0
+            video_size = movie_output_path.stat().st_size if movie_output_path.exists() else 0
+
+            return {
+                "project_path": str(project_dir),
+                "scene_path": str(absolute_scene_path) if absolute_scene_path is not None else None,
+                "scene_resource_path": resource_scene_path,
+                "run_target": run_target,
+                "duration": duration,
+                "fps": fps,
+                "frame_count": frame_count,
+                "output_format": "avi",
+                "video_path": str(movie_output_path),
+                "video_size_bytes": video_size,
+                "has_audio": has_audio,
+                "camera_waypoints_count": len(camera_waypoints) if camera_waypoints else 0,
+                "command": command_with_capture,
+                "log_path": str(log_path),
+                "godot_executable": str(executable),
+                "godot_version": version,
+                "warnings": warnings,
+            }
+
+        # MP4 
         frame_files = sorted(recordings_dir.glob(f"{stem}" + "[0-9]" * 8 + ".png"))
         if not frame_files and movie_output_path.exists():
             frame_files = [movie_output_path]
-
-        wav_path = recordings_dir / f"{stem}.wav"
 
         if result.returncode != 0 or not frame_files:
             details = "\n".join(
@@ -2919,13 +2963,11 @@ class GodotController:
             )
 
         has_audio = wav_path.exists() and wav_path.stat().st_size > 0
-        warnings: list[str] = []
 
         if ffmpeg_path is None:
             warnings.append(
-                "ffmpeg was not found on PATH. "
-                "Skipping video encoding. Raw frames have been kept. "
-                
+                "MP4 was requested but ffmpeg was not found on PATH. "
+                "Skipping video encoding. Raw frames have been kept."
             )
             frame_paths = [str(f) for f in frame_files]
 
