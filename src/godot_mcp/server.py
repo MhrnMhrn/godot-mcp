@@ -1167,9 +1167,9 @@ class GodotMcpServer:
                 name="godot_record_video",
                 description=(
                     "Record a video of a Godot project or scene. "
-                    "Produces an MP4 if ffmpeg is installed; "
-                    "otherwise keeps raw PNG frames and audio. "
-                    "Optionally animate the camera along AI-defined waypoints."
+                    "Produces an AVI by default. "
+                    "Set output_format to 'mp4' (requires ffmpeg). "
+                    "Optionally animate the camera along waypoints."
                 ),
                 input_schema={
                     "type": "object",
@@ -1246,6 +1246,15 @@ class GodotMcpServer:
                             "type": "string",
                             "description": "Optional explicit path to the Godot executable or .app bundle.",
                         },
+                        "output_format": {
+                            "type": "string",
+                            "description": (
+                                "Video output format: 'avi' (default) "
+                                "'mp4' encodes with ffmpeg (requires ffmpeg)."
+                            ),
+                            "enum": ["avi", "mp4"],
+                            "default": "avi",
+                        },
                     },
                     "required": ["project_path"],
                     "additionalProperties": False,
@@ -1259,6 +1268,7 @@ class GodotMcpServer:
                     camera_waypoints=args.get("camera_waypoints"),
                     camera_node_path=args.get("camera_node_path"),
                     godot_executable=args.get("godot_executable"),
+                    output_format=args.get("output_format", "avi"),
                 ),
             ),
             ToolDefinition(
