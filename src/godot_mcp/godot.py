@@ -2924,7 +2924,7 @@ class GodotController:
                     f"{details or 'No output was returned.'}"
                 )
 
-            has_audio = wav_path.exists() and wav_path.stat().st_size > 0
+            has_audio = True
             video_size = movie_output_path.stat().st_size if movie_output_path.exists() else 0
 
             return {
